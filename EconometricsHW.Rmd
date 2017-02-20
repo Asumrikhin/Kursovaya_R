@@ -1,0 +1,358 @@
+---
+title: "Econometrics Homework"
+author: "Alexander Umrikhin"
+date: '22 декабря 2016 г '
+output: html_document
+---
+Подгружаем пакеты и 25ю волну РЛМС
+```{r lego, message = FALSE}
+library(dplyr)
+library(corrplot)
+library("rlms")
+library("dplyr")
+library(ggplot2)
+library(scales)
+library(GGally)
+library(sjPlot)
+library("sandwich")
+library("lmtest")
+library("Greg")
+df <- rlms_read('/Users/Alexander/Downloads/r24iall25b.sav')
+
+```
+
+
+Для начала я решил взять параметры "пацана с района": кол-во водки, сигарет, классов в школе и посещал ли ПТУ. И посмотреть, как это всё влиет на доход.
+
+Выделим эти столбцы, удалим пропуски и посмотрим на статистические характеристики.
+```{r 1}
+df1 <- df[,c(588,96,548,217,180)]
+colnames(df1) <- c("vodka", "income", "cigs", "ptu", "school")
+df1 <- na.omit(df1)
+summary(df1)
+```
+
+Посмотрим на доли пропусков по каждому показателю из тех, что я взял
+
+```{r 2}
+paste0("Part of NA values in vodka consumption: ", round(sum(is.na(df[588]))/nrow(df),3))
+paste0("Part of NA values in income: ", round(sum(is.na(df[96]))/nrow(df),3))
+paste0("Part of NA values in cigarette consumtion: ", round(sum(is.na(df[548]))/nrow(df),3))
+paste0("Part of NA values in PTU attendance: ", round(sum(is.na(df[217]))/nrow(df),3))
+paste0("Part of NA values in number of class finished: ", round(sum(is.na(df[180]))/nrow(df),3))
+paste0("Number of people in dataframe:", nrow(df1))
+```
+
+Нарисуем распределения и всякие графики зависимостей.
+
+Для начала график распределения дохода.
+```{r 3}
+label <- paste("Mean = ", toString(round(mean(df1$income), digits = 3)))
+ggplot(df1, aes(x = income))+
+  geom_density(size = 1, adjust = 3)+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)+
+  geom_vline(xintercept = mean(df1[['income']]), color="red")+
+  annotate("text", 50000, 0.000025, label = label, color="red")+
+  ggtitle("Income distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Распределение граммов водки, выпитых за день
+
+```{r 4}
+label <- paste("Mean = ", toString(round(mean(df1$vodka), digits = 3)))
+ggplot(df1, aes(x = vodka))+
+  geom_density(size = 1, adjust = 3)+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)+
+  geom_vline(xintercept = mean(df1[['vodka']]), color="red")+
+  annotate("text", 460, 0.0022, label = label, color="red")+
+  ggtitle("Vodka consumption distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Посмотрим на зависимость дохода от потребления водки
+
+```{r 5}
+ggplot(df1, aes(x = vodka, y = income))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  ggtitle("Income(vodka consumption) plot")
+```
+
+Теперь посмотрим на распределение потребления сигарет в день
+
+```{r 6}
+label <- paste("Mean = ", toString(round(mean(df1$cigs), digits = 3)))
+ggplot(df1, aes(x = cigs))+
+  geom_density(size = 1, adjust = 3)+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)+
+  geom_vline(xintercept = mean(df1[['cigs']]), color="red")+
+  annotate("text", 25, 0.03, label = label, color="red")+
+  ggtitle("Cigarettes consumption distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Дальше посмотрим, как зависит доход от количества сигарет, выкуриваемого в день.
+
+```{r 7}
+ggplot(df1, aes(x = cigs, y = income))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  ggtitle("Income(ciggarette consumption) plot")
+```
+
+Посмотрим, как много людей учились в ПТУ
+
+```{r 8}
+
+ggplot(df1, aes(x = ptu))+
+  geom_bar()+
+  ggtitle("PTU GUYZ")
+
+```
+
+И посмотрим на боксплоты для доходов
+
+```{r 9}
+
+ggplot(df1, aes(ptu, income))+
+  geom_boxplot(outlier.colour = "red", outlier.shape = 1)+
+  ggtitle("PTU~INCOME")
+```
+
+Теперь на распределение количества оконченных классов
+
+```{r 10}
+
+ggplot(df1, aes(x = school))+
+  geom_bar()+
+  ggtitle("Classes finished")
+
+```
+
+И на боксплот для доходов
+
+```{r 11}
+
+ggplot(df1, aes(school, income))+
+  geom_boxplot(aes(group = cut_width(school, 1)), outlier.colour = "red", outlier.shape = 1)
+  ggtitle("Classes~Income")
+```
+
+Теперь нанесем все вместе на pairplot
+```{r 12}
+ggpairs(df1)
+```
+
+А можно и график корреляций вывести!
+
+```{r 13}
+mcor <- cor(df1[-4]) 
+corrplot(mcor, type="upper", tl.col="black", tl.srt=45)
+```
+
+Видно, что сильно коррелированных переменных нет.
+
+Самое время строить модель. Для этого прошкалируем данные(чтоб коэффициенты показывали относительное влияние)
+
+```{r 14}
+df1scaled <- df1 %>% mutate_each_(funs(scale(.) %>% as.vector), 
+                                  vars=c("income","vodka", "cigs", "school"))
+fit1 <- lm(income ~ vodka + cigs + ptu + school, data=df1scaled)
+
+summary(fit1)
+```
+
+Получилась всего одна значимая переменная - количество оконченных классов. Пи-вэлью равен 0.08, это довольно много. Можно сделать вывод, что образ жизни районного пацана не особо влияет на доход. Поэтому мне не очень нравится эта регрессия.
+Построим доверительные интервалы.
+
+```{r 15}
+
+confint(fit1)
+sjp.lm(fit1)
+```
+Круто выглядит!
+
+Теперь перейдем к другой регрессии: посмотрим, как потребление водки и сигарет, а также доход влияют на расходы на медицину.
+
+```{r 16}
+df2 <- df[,c(588,466,548,96)]
+colnames(df2) <- c("vodka", "medicine", "cigs", "income")
+df2 <- na.omit(df2)
+```
+
+Посмотрим на долю пропусков в новой перменной - расходы на медицину
+
+```{r 17}
+paste0("Part of NA values in medicine spendings:", sum(is.na(df[466]))/nrow(df))
+paste0("Number of people in dataframe:", nrow(df2))
+```
+
+Посмотрим на новые статистические данные
+
+```{r 18}
+summary(df2)
+```
+
+Теперь посмотрим на распределение расходов на медицину
+
+```{r 19}
+label <- paste("Mean = ", toString(round(mean(df2$medicine), digits = 3)))
+ggplot(df2, aes(x = medicine))+
+  geom_density(size = 1, adjust = 3)+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)+
+  geom_vline(xintercept = mean(df2[['medicine']]), color="red")+
+  annotate("text", 2000, 0.0006, label = label, color="red")+
+  ggtitle("Medicine spendings distribution")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Теперь посмотрим на то, как наши переменные по отдельности влияют на расходы на медицину графически
+
+```{r 20}
+ggplot(df2, aes(x = vodka, y = medicine))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  ggtitle("Medicine(vodka comsumption) plot")
+```
+
+Отрицательный тренд очень даже интересен
+
+```{r 21}
+ggplot(df2, aes(x = income, y = medicine))+
+  geom_point()+
+  geom_smooth(method = "lm")
+  ggtitle("Medicine(income) plot")
+```
+
+```{r 22}
+ggplot(df2, aes(x = cigs, y = medicine))+
+  geom_point()+
+  geom_smooth(method = "lm")
+  ggtitle("Medicine(cigarettes consumption) plot")
+```
+
+```{r 23}
+ggpairs(df2)
+```
+
+Взглянем-ка и на новые корреляции
+
+```{r 24}
+mcor <- cor(df2) 
+corrplot(mcor, type="upper", tl.col="black", tl.srt=45)
+```
+
+Опять сильных корреляций нет
+
+Дальше строим нашу модель!
+
+```{r 25}
+df2scaled <- df2 %>% mutate_each_(funs(scale(.) %>% as.vector), 
+                                  vars=c("vodka", "cigs", "income", "medicine"))
+fit2 <- lm(medicine ~ vodka + cigs + income, data=df2scaled)
+
+summary(fit2)
+```
+
+Круто! 2 значимых регрессора и низкий пи-вэлью! К сожалению потребление водки не заставляет наших граждан больше заботиться о своем здоровье(. R^2 все равно остался довольно маленьким, значит наши параметры довольно плохо описывают прогнозируемую переменную, что ж, бывает.
+
+Построим доверительные интервалы
+
+```{r 26}
+confint(fit2)
+sjp.lm(fit2)
+```
+
+И построим их же, но с правильной оценкой ковариационной матрицы. В этом нам поможет господин Грег!
+```{r 27}
+Greg::confint_robust(fit2)
+```
+
+Посмотрим визуально на гетероскедастичность. Для этого построим график зависимости стандартизированных остатков от y_hat, т.к. последний включает в себя все регрессоры, а у нас регрессия множественная.
+
+```{r 28}
+fit2.st.resid <- rstandard(fit2) # получаем стандартизированные остатки
+ggplot(aes(x = predict(fit2, df2scaled), y = abs(fit2.st.resid)), data = df2) + geom_point(alpha = 0.2) + 
+  labs(x = "Предсказанные значения", y = expression(paste("Стандартизированные остатки, ", s[i])),
+       title = "Графическое обнаружение гетероскедастичности")
+```
+
+Трудно сделать однозначные выводы, но, на мой взгляд, плюс-минус ее нет.
+
+Посмотрим, что нам скажет тест Бройша-Пагана
+
+```{r 29}
+bptest(fit2)
+```
+
+Пи-вэлью высокий, гетероскедастичности нет!
+
+Посмотрим на графики зависимости стандартизированных остатков от разных регрессоров
+
+```{r 30}
+fit2.st.resid <- rstandard(fit2) # получаем стандартизированные остатки
+ggplot(aes(x = income, y = abs(fit2.st.resid)), data = df2) + geom_point(alpha = 0.2) + 
+  labs(x = "Доход", y = expression(paste("Стандартизированные остатки, ", s[i])),
+       title = "Графическое обнаружение гетероскедастичности для дохода")
+```
+
+Тоже сложно сказать о наличии или отсутсвии гетероскедастичности
+
+```{r 31}
+fit2.st.resid <- rstandard(fit2) # получаем стандартизированные остатки
+ggplot(aes(x = vodka, y = abs(fit2.st.resid)), data = df2) + geom_point(alpha = 0.2) + 
+  labs(x = "Потребление водки", y = expression(paste("Стандартизированные остатки, ", s[i])),
+       title = "Графическое обнаружение гетероскедастичности для водки")
+```
+
+Тут ее, скорее всего, нет.
+
+```{r 32}
+fit2.st.resid <- rstandard(fit2) # получаем стандартизированные остатки
+ggplot(aes(x = cigs, y = abs(fit2.st.resid)), data = df2) + geom_point(alpha = 0.2) + 
+  labs(x = "Потребление сигарет", y = expression(paste("Стандартизированные остатки, ", s[i])),
+       title = "Графическое обнаружение гетероскедастичности для сигарет")
+```
+
+А тут непонятно
+
+
+Дальше применим Тест Goldfeld-Quandt. Будем поочереди сортировать наблюдения в порядке предполагаемого роста гетероскедастичности по одному из 3х наших регрессоров, выкидывать 20% данных для подчеркивания разницы в дисперсии между конечными и начальными наблюдениями и смотреть, появляется ли гетероскедастичность.
+
+```{r 33}
+
+df2test <- df2scaled[order(df2scaled$cigs), ] 
+fit3 <- lm(medicine ~ vodka + cigs + income, data=df2test) 
+gqtest(fit3, fraction = 0.2)
+```
+
+Я взял потребление сигарет и пи-вэлью стал маленьким, то есть гетероскедастичность имеет место быть.
+
+```{r 34}
+df2test <- df2scaled[order(df2scaled$vodka), ] 
+fit3 <- lm(medicine ~ vodka + cigs + income, data=df2test) 
+gqtest(fit3, fraction = 0.2)
+```
+
+Проделав то же самое с потреблением водки, мы увидели, что пи-вэлью высокий, значит гетероскедастичности не было.
+
+```{r 35}
+df2test <- df2scaled[order(df2scaled$income), ] 
+fit3 <- lm(medicine ~ vodka + cigs + income, data=df2test) 
+gqtest(fit3, fraction = 0.2)
+```
+
+С доходом опять же есть гетероскедастичность.
+
+В итоге, я построил 2 регрессии, одна из которых полность провалилась, другая хотя бы статистически значима, но все равно имеет очень низкий R^2, возможно но довольно примечательно, что потребление сигарет влияет на расходы на здоровье, а потребление водки - нет, еще и имеет отрицательную корреляцию(хоть и статистически незначимую). Влияние дохда на расходы на медицину было примерно очевидно.
+С гетероскедастичностью было трудно делать выводы по графикам, видимо, потому что маловато значений и не самые лучшие регрессии(остатки так и так довольно большие). В целом вроде на неизмененных данных гетероскедастичность отсутствовала, диспресия остатков примерно константа.
+
+```{r 36}
+sessionInfo()
+```
+
